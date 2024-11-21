@@ -1,0 +1,18 @@
+[
+    {
+      "ParameterKey": "KeyName",
+      "ParameterValue": "deployment-key"
+    },
+    {
+        "ParameterKey": "TurnUsername",
+        "ParameterValue": "<your-username>"
+    },
+    {
+        "ParameterKey": "TurnPassword",
+        "ParameterValue": "<your-password>"
+    },
+    {
+        "ParameterKey": "InstanceType",
+        "ParameterValue": "t3.micro"
+    }
+]

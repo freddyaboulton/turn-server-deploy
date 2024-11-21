@@ -1,0 +1,141 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: 'CloudFormation template for deploying Coturn TURN server on Ubuntu EC2'
+
+Parameters:
+  InstanceType:
+    Description: EC2 instance type
+    Type: String
+    Default: t3.micro
+    AllowedValues:
+      - t3.micro
+      - t3.small
+      - t3.medium
+      - c4.large
+      - c5.large
+
+  KeyName:
+    Description: Name of an existing EC2 KeyPair for SSH access
+    Type: AWS::EC2::KeyPair::KeyName
+    ConstraintDescription: Must be the name of an existing EC2 KeyPair
+
+  TurnUsername:
+    Description: Username for TURN server authentication
+    Type: String
+    MinLength: 1
+
+  TurnPassword:
+    Description: Password for TURN server authentication
+    Type: String
+    MinLength: 8
+    NoEcho: true
+
+Resources:
+  TurnServerSecurityGroup:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupDescription: Security group for Coturn TURN server
+      SecurityGroupIngress:
+        - IpProtocol: tcp
+          FromPort: 22
+          ToPort: 22
+          CidrIp: 0.0.0.0/0
+          Description: SSH access
+        - IpProtocol: tcp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: TURN over TCP
+        - IpProtocol: udp
+          FromPort: 80
+          ToPort: 80
+          CidrIp: 0.0.0.0/0
+          Description: TURN over UDP
+        - IpProtocol: tcp
+          FromPort: 443
+          ToPort: 443
+          CidrIp: 0.0.0.0/0
+          Description: TURN over TLS
+        - IpProtocol: udp
+          FromPort: 49152
+          ToPort: 65535
+          CidrIp: 0.0.0.0/0
+          Description: TURN relay ports
+
+  TurnServerInstance:
+    Type: AWS::EC2::Instance
+    Properties:
+      InstanceType: !Ref InstanceType
+      ImageId: ami-0c7217cdde317cfec  # Ubuntu 22.04 LTS in us-east-1
+      KeyName: !Ref KeyName
+      SecurityGroupIds: 
+        - !Ref TurnServerSecurityGroup
+      Tags:
+        - Key: Name
+          Value: Coturn-TURN-Server
+      UserData:
+        Fn::Base64: !Sub |
+          #!/bin/bash
+          apt-get update
+          apt-get install -y coturn
+
+          # Get public IP
+          PUBLIC_IP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4)
+
+          cat > /lib/systemd/system/coturn.service << EOF
+          [Unit]
+          Description=coTURN STUN/TURN Server
+          Documentation=man:coturn(1) man:turnadmin(1) man:turnserver(1)
+          After=network.target
+
+          [Service]
+          User=turnserver
+          Group=turnserver
+          Type=notify
+          ExecStart=/usr/bin/turnserver -c /etc/turnserver.conf --pidfile=
+          Restart=on-failure
+          InaccessibleDirectories=/home
+          PrivateTmp=yes
+          AmbientCapabilities=CAP_NET_BIND_SERVICE
+
+          [Install]
+          WantedBy=multi-user.target
+          EOF
+
+          # Configure Coturn
+          cat > /etc/turnserver.conf << EOF
+          # Main listening ports
+          listening-port=80
+          tls-listening-port=443
+          
+          # Authentication
+          fingerprint
+          lt-cred-mech
+          user=${TurnUsername}:${TurnPassword}
+          
+          # Server configuration
+          realm=$PUBLIC_IP
+          external-ip=$PUBLIC_IP
+          min-port=49152
+          max-port=65535
+          
+          # Recommended for better performance
+          no-tcp-relay
+          EOF
+
+          # Enable Coturn service
+          echo 'TURNSERVER_ENABLED=1' > /etc/default/coturn
+
+          # Start Coturn service
+          systemctl enable coturn
+          systemctl start coturn
+          sudo systemctl daemon-reload
+          systemctl restart coturn
+
+Outputs:
+  PublicIP:
+    Description: Public IP address of the TURN server
+    Value: !GetAtt TurnServerInstance.PublicIp
+
+  PublicDNS:
+    Description: Public DNS name of the TURN server
+    Value: !GetAtt TurnServerInstance.PublicDnsName
